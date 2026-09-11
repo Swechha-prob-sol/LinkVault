@@ -1,6 +1,6 @@
 # LinkVault
 
-A modern, production-ready link management and analytics platform. Create, track, and optimize shortened URLs with advanced features like A/B testing, scheduling, and Link-in-Bio pages.
+A modern, production-ready link management and analytics platform. Create, track, and optimize shortened URLs with advanced features like A/B testing, scheduling, and Link-in-Bio pages..
 
 ## ✨ Features
 
