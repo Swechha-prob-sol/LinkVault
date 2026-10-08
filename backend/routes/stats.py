@@ -20,10 +20,14 @@ def get_link_stats(link_id):
     if link.user_id != user_id:
         return jsonify({'error': 'Unauthorized'}), 403
 
-    # Parse date range
-    days = request.args.get('days', 30, type=int)
+    # Parse date range (support 'range' and 'days')
+    range_param = request.args.get('range', type=int)
+    days_param = request.args.get('days', type=int)
+    days = range_param or days_param or 30
     if days > 365:
         days = 365
+    elif days < 1:
+        days = 1
 
     start_date = datetime.utcnow() - timedelta(days=days)
 
@@ -33,8 +37,8 @@ def get_link_stats(link_id):
         Click.clicked_at >= start_date
     ).count()
 
-    # Clicks by day
-    clicks_by_day = db.session.query(
+    # Clicks by day query
+    clicks_by_day_query = db.session.query(
         func.date(Click.clicked_at).label('date'),
         func.count(Click.id).label('count')
     ).filter(
@@ -43,6 +47,19 @@ def get_link_stats(link_id):
     ).group_by(
         func.date(Click.clicked_at)
     ).all()
+
+    # Create mapping of date -> count
+    date_counts = {str(day[0]): day[1] for day in clicks_by_day_query if day[0] is not None}
+
+    # Generate continuous sequence of dates for the range
+    clicks_over_time = []
+    today = datetime.utcnow().date()
+    for i in range(days - 1, -1, -1):
+        d_str = (today - timedelta(days=i)).isoformat()
+        clicks_over_time.append({
+            'date': d_str,
+            'count': date_counts.get(d_str, 0)
+        })
 
     # Clicks by hour (last 24 hours)
     clicks_by_hour = db.session.query(
@@ -77,6 +94,21 @@ def get_link_stats(link_id):
         Click.clicked_at >= start_date
     ).group_by(
         Click.device_type
+    ).order_by(
+        func.count(Click.id).desc()
+    ).all()
+
+    # Clicks by browser
+    clicks_by_browser = db.session.query(
+        Click.browser,
+        func.count(Click.id).label('count')
+    ).filter(
+        Click.link_id == link_id,
+        Click.clicked_at >= start_date
+    ).group_by(
+        Click.browser
+    ).order_by(
+        func.count(Click.id).desc()
     ).all()
 
     # Clicks by referrer
@@ -114,18 +146,18 @@ def get_link_stats(link_id):
         func.count(Click.id).desc()
     ).first()
 
-    peak_hour = int(peak_hour_result[0]) if peak_hour_result else None
+    peak_hour = int(peak_hour_result[0]) if peak_hour_result and peak_hour_result[0] is not None else None
 
     return jsonify({
+        'link_id': link_id,
+        'range': days,
         'total_clicks': total_clicks,
         'unique_countries': unique_countries,
         'peak_hour': peak_hour,
-        'clicks_by_day': [
-            {'date': str(day[0]), 'count': day[1]}
-            for day in clicks_by_day
-        ],
+        'clicks_over_time': clicks_over_time,
+        'clicks_by_day': clicks_over_time,
         'clicks_by_hour': [
-            {'hour': int(hour[0]) if hour[0] else 0, 'count': hour[1]}
+            {'hour': int(hour[0]) if hour[0] is not None else 0, 'count': hour[1]}
             for hour in clicks_by_hour
         ],
         'clicks_by_country': [
@@ -135,6 +167,10 @@ def get_link_stats(link_id):
         'clicks_by_device': [
             {'device': d[0] or 'Unknown', 'count': d[1]}
             for d in clicks_by_device
+        ],
+        'clicks_by_browser': [
+            {'browser': b[0] or 'Unknown', 'count': b[1]}
+            for b in clicks_by_browser
         ],
         'clicks_by_referrer': [
             {'referrer': r[0] or 'Direct', 'count': r[1]}

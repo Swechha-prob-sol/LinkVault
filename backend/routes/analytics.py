@@ -7,7 +7,100 @@ from sqlalchemy import func
 
 analytics_bp = Blueprint('analytics', __name__, url_prefix='/api/analytics')
 
-@analytics_bp.route('/links/<int:link_id>/summary', methods=['GET'])
+@analytics_bp.route('/overview', methods=['GET'])
+@jwt_required()
+def get_analytics_overview():
+    """Get account-wide analytics overview for the current user."""
+    user_id = int(get_jwt_identity())
+
+    # User's non-deleted links base query
+    user_links_filter = (Link.user_id == user_id, Link.deleted_at.is_(None))
+
+    total_links = Link.query.filter(*user_links_filter).count()
+    total_active_links = Link.query.filter(*user_links_filter, Link.is_active.is_(True)).count()
+
+    # Total clicks across all user's non-deleted links
+    total_clicks = db.session.query(func.count(Click.id)).join(
+        Link, Click.link_id == Link.id
+    ).filter(
+        Link.user_id == user_id,
+        Link.deleted_at.is_(None)
+    ).scalar() or 0
+
+    # Clicks in the last 7 days
+    seven_days_ago = datetime.utcnow() - timedelta(days=7)
+    clicks_7d = db.session.query(func.count(Click.id)).join(
+        Link, Click.link_id == Link.id
+    ).filter(
+        Link.user_id == user_id,
+        Link.deleted_at.is_(None),
+        Click.clicked_at >= seven_days_ago
+    ).scalar() or 0
+
+    # Clicks in the last 30 days
+    thirty_days_ago = datetime.utcnow() - timedelta(days=30)
+    clicks_30d = db.session.query(func.count(Click.id)).join(
+        Link, Click.link_id == Link.id
+    ).filter(
+        Link.user_id == user_id,
+        Link.deleted_at.is_(None),
+        Click.clicked_at >= thirty_days_ago
+    ).scalar() or 0
+
+    # Top 5 links by clicks
+    top_links_query = db.session.query(
+        Link,
+        func.count(Click.id).label('clicks')
+    ).outerjoin(
+        Click, Click.link_id == Link.id
+    ).filter(
+        Link.user_id == user_id,
+        Link.deleted_at.is_(None)
+    ).group_by(
+        Link.id
+    ).order_by(
+        func.count(Click.id).desc()
+    ).limit(5).all()
+
+    top_links = []
+    for link, click_cnt in top_links_query:
+        item = link.to_dict()
+        item['clicks'] = click_cnt
+        top_links.append(item)
+
+    # Clicks per day for the last 30 days
+    clicks_per_day_query = db.session.query(
+        func.date(Click.clicked_at).label('date'),
+        func.count(Click.id).label('count')
+    ).join(
+        Link, Click.link_id == Link.id
+    ).filter(
+        Link.user_id == user_id,
+        Link.deleted_at.is_(None),
+        Click.clicked_at >= thirty_days_ago
+    ).group_by(
+        func.date(Click.clicked_at)
+    ).all()
+
+    date_counts = {str(r[0]): r[1] for r in clicks_per_day_query if r[0] is not None}
+    today = datetime.utcnow().date()
+    clicks_per_day = []
+    for i in range(29, -1, -1):
+        d_str = (today - timedelta(days=i)).isoformat()
+        clicks_per_day.append({
+            'date': d_str,
+            'count': date_counts.get(d_str, 0)
+        })
+
+    return jsonify({
+        'total_clicks': total_clicks,
+        'total_links': total_links,
+        'total_active_links': total_active_links,
+        'clicks_7d': clicks_7d,
+        'clicks_30d': clicks_30d,
+        'top_links': top_links,
+        'clicks_per_day': clicks_per_day,
+    }), 200
 @jwt_required()
 def get_link_analytics_summary(link_id):
     """Get analytics summary for a link."""
